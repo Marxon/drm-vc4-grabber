@@ -1,4 +1,3 @@
-use std::cmp::max;
 
 use drm_ffi::drm_mode_fb_cmd2;
 use image::{GenericImage, RgbImage};
@@ -12,14 +11,17 @@ pub struct YUV420Plane {
 }
 
 impl YUV420Plane {
+    #[inline]
     pub fn len(&self) -> usize {
-        (self.pitch * self.size.1) as _
+        (self.pitch * self.size.1) as usize
     }
 
+    #[inline]
     pub fn end(&self) -> usize {
-        (self.offset as usize) + self.len()
+        self.offset as usize + self.len()
     }
 
+    #[inline]
     pub fn offset(&self, x: usize, y: usize) -> usize {
         self.pitch as usize * y + x
     }
@@ -31,6 +33,7 @@ pub struct YUV420 {
 }
 
 impl YUV420 {
+    #[inline]
     pub fn from(fbinfo: drm_mode_fb_cmd2) -> YUV420 {
         let plane = |i| YUV420Plane {
             pitch: fbinfo.pitches[i],
@@ -53,12 +56,9 @@ pub struct FramebufferYUV420 {
 }
 
 impl FramebufferYUV420 {
+    #[inline]
     pub fn len(&self) -> usize {
-        let mut res = 0;
-        for plane in self.planes.iter() {
-            res = max(plane.end(), res);
-        }
-        res as _
+        self.planes.iter().map(|plane| plane.end()).max().unwrap_or(0)
     }
 }
 
@@ -68,14 +68,16 @@ pub trait Framebuffer<P> {
 }
 
 impl Framebuffer<YUV420Pixel> for FramebufferYUV420 {
+    #[inline]
     fn info<'a>(&'a self) -> &'a drm_mode_fb_cmd2 {
         &self.info2
     }
 
+    #[inline]
     fn get(&self, mappings: [&[u8]; 3], x: usize, y: usize) -> YUV420Pixel {
-        let offset: usize = self.planes[0].offset(x, y);
-        let offset1: usize = self.planes[1].offset(x / 2, y / 2);
-        let offset2: usize = self.planes[2].offset(x / 2, y / 2);
+        let offset = self.planes[0].offset(x, y);
+        let offset1 = self.planes[1].offset(x / 2, y / 2);
+        let offset2 = self.planes[2].offset(x / 2, y / 2);
 
         YUV420Pixel::new(
             mappings[0][offset],
@@ -94,9 +96,10 @@ where
     P: ToRgb,
 {
     pub fn decode_image(&self, mappings: [&[u8]; 3]) {
-        let mut img = RgbImage::new(self.fb.info().width, self.fb.info().height);
-        for y in 0..self.fb.info().height {
-            for x in 0..self.fb.info().width {
+        let info = self.fb.info();
+        let mut img = RgbImage::new(info.width, info.height);
+        for y in 0..info.height {
+            for x in 0..info.width {
                 unsafe {
                     img.unsafe_put_pixel(x, y, self.fb.get(mappings, x as _, y as _).rgb());
                 }

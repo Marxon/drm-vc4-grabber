@@ -49,8 +49,8 @@ fn copy_buffer<T: Sized + Copy>(
 }
 
 fn decimate_image_4(size: (usize, usize), image: &[u32], copy: &mut [u32]) {
-    let decim = (4, 4);
-    let newsize = (size.0 / decim.0, size.1 / decim.1);
+    let decim = (8, 8);
+    let newsize = (size.0 / decim.0 / 2, size.1 / decim.1 / 2);
 
     for y in 0..newsize.1 {
         let ty = decim.1 * y;
@@ -61,121 +61,7 @@ fn decimate_image_4(size: (usize, usize), image: &[u32], copy: &mut [u32]) {
     }
 }
 
-fn decode_p030_image(
-    card: &Card,
-    size: (usize, usize),
-    pitches: u32,
-    handle: u32,
-    modifier: u64,
-    offset: usize,
-    verbose: bool,
-) -> Result<RgbImage, SystemError> {
-    // We assume the DRM BROADCOM SAND128 format
-    if u64::from(drm_fourcc::DrmModifier::Broadcom_sand128) != modifier & !(0xFFFF << 8) {
-        panic!("Unsupported P030 modifier value");
-    }
 
-    let stride = 128 / 4; // each column is 128 bytes wide, we use 4 bytes per word
-    let colpx = 96;
-
-    let ypitch = pitches as usize / (32 / 8);
-    let ylines = ((modifier >> 8) & 0xFFFFFFFF) as usize;
-    let length = ylines * (size.0 / colpx) * stride;
-    let crcboffset = offset / 4; // offset of the CrCb information in each column
-
-    if verbose {
-        println!(
-            "P030, size: {:?}, lines: {}, pitches: {}, length: {}",
-            size, ylines, ypitch, length
-        );
-    }
-
-    let mut yplane = vec![0u32; length as _];
-    copy_buffer(card, handle, &mut yplane, verbose)?;
-
-    let decim = 3;
-    let mut img = RgbImage::new((size.0 / decim) as _, (size.1 / decim) as _);
-    for y in 0..size.1 / decim {
-        let ty = y * decim;
-        for x in 0..size.0 / decim {
-            let tx = x * decim;
-            let col = tx / colpx;
-            let col_offset = col * stride * ylines;
-            let x_mod = (tx % colpx) / decim;
-
-            let ypx = unsafe { yplane.get_unchecked(col_offset + ty * stride + x_mod) };
-            let rx = x_mod / 2 * 2;
-            let crcind = col_offset + crcboffset + ty / 2 * stride + rx;
-            let crcbpx = unsafe { yplane.get_unchecked(crcind + 1) };
-
-            let yuv = YUV420Pixel::new((ypx >> 2) as u8, (crcbpx >> 12) as u8, (crcbpx >> 2) as u8);
-
-            unsafe {
-                img.unsafe_put_pixel(x as _, y as _, yuv.rgb());
-            }
-        }
-    }
-
-    Ok(img)
-}
-
-fn decode_nv12_image(
-    card: &Card,
-    size: (usize, usize),
-    pitches: u32,
-    handle: u32,
-    modifier: u64,
-    offset: usize,
-    verbose: bool,
-) -> Result<RgbImage, SystemError> {
-    // We assume the DRM BROADCOM SAND128 format
-    if u64::from(drm_fourcc::DrmModifier::Broadcom_sand128) != modifier & !(0xFFFF << 8) {
-        panic!("Unsupported NV12 modifier value");
-    }
-
-    let stride = 128 / 4; // each column is 128 bytes wide, we use 4 bytes per word
-    let colpx = 128; // 1 byte per pixel
-
-    let ypitch = pitches as usize / (32 / 8);
-    let ylines = ((modifier >> 8) & 0xFFFFFFFF) as usize;
-    let length = ylines * (size.0 / colpx) * stride;
-    let crcboffset = offset / 4; // offset of the CrCb information in each column
-
-    if verbose {
-        println!(
-            "NV12, size: {:?}, lines: {}, pitches: {}, length: {}",
-            size, ylines, ypitch, length
-        );
-    }
-
-    let mut yplane = vec![0u32; length as _];
-    copy_buffer(card, handle, &mut yplane, verbose)?;
-
-    let decim: usize = 4;
-    let mut img = RgbImage::new((size.0 / decim) as _, (size.1 / decim) as _);
-    for y in 0..size.1 / decim {
-        let ty = y * decim;
-        for x in 0..size.0 / decim {
-            let tx = x * decim;
-            let col = tx / colpx;
-            let col_offset = col * stride * ylines;
-            let x_mod = (tx % colpx) / decim;
-
-            let ypx = unsafe { yplane.get_unchecked(col_offset + ty * stride + x_mod) };
-            let rx = x_mod / 2 * 2;
-            let crcind = col_offset + crcboffset + ty / 2 * stride + rx;
-            let crcbpx = unsafe { yplane.get_unchecked(crcind + 1) };
-
-            let yuv = YUV420Pixel::new((ypx >> 0) as u8, (crcbpx >> 0) as u8, (crcbpx >> 8) as u8);
-
-            unsafe {
-                img.unsafe_put_pixel(x as _, y as _, yuv.rgb());
-            }
-        }
-    }
-
-    Ok(img)
-}
 
 fn dump_linear_to_image(
     card: &Card,
@@ -308,18 +194,6 @@ pub fn dump_framebuffer_to_image(
 
     let size = (fbinfo2.width, fbinfo2.height);
 
-    if fbinfo2.pixel_format == 808661072 {
-        return decode_p030_image(
-            card,
-            (size.0 as _, size.1 as _),
-            fbinfo2.pitches[0],
-            fbinfo2.handles[0],
-            fbinfo2.modifier[0],
-            fbinfo2.offsets[1] as _,
-            verbose,
-        );
-    }
-
     let fourcc = drm_fourcc::DrmFourcc::try_from(fbinfo2.pixel_format).unwrap();
     let modifier = drm_fourcc::DrmModifier::try_from(fbinfo2.modifier[0]).unwrap();
 
@@ -368,16 +242,6 @@ pub fn dump_framebuffer_to_image(
             fbinfo2.handles[0],
             verbose,
         ),
-        DrmFourcc::Nv12 => decode_nv12_image(
-            card,
-            (size.0 as _, size.1 as _),
-            fbinfo2.pitches[0],
-            fbinfo2.handles[0],
-            fbinfo2.modifier[0],
-            fbinfo2.offsets[1] as _,
-            verbose,
-        ),
-
         _ => panic!(
             "Unsupported framebuffer pixel format: {} {:x}",
             fourcc, fbinfo2.pixel_format

@@ -1042,4 +1042,3 @@ pub fn finish_size_prefixed_request_buffer<'a, 'b>(fbb: &'b mut flatbuffers::Fla
   fbb.finish_size_prefixed(root, None);
 }
 }  // pub mod hyperionnet
-

@@ -6,27 +6,22 @@ struct PixelAverage {
 }
 
 impl PixelAverage {
-    pub fn new() -> PixelAverage {
-        PixelAverage {
+    pub fn new() -> Self {
+        Self {
             avg_rb: 0,
             avg_g: 0,
         }
     }
 
     pub fn add(&mut self, rgb: u32) {
-        let rb = rgb & 0x00FF00FF;
-        let g = rgb & 0x0000FF00;
-        self.avg_rb += rb;
-        self.avg_g += g;
+        self.avg_rb += rgb & 0x00FF00FF;
+        self.avg_g += rgb & 0x0000FF00;
     }
 
     pub fn rgb(self) -> Rgb<u8> {
-        let rb = self.avg_rb / 16;
-        let g = (self.avg_g / 16) >> 8;
-        let b = rb;
-        let r = rb >> 16;
-
-        Rgb([r as _, g as _, b as _])
+        let rb = (self.avg_rb / 16) as u8;
+        let g = ((self.avg_g / 16) >> 8) as u8;
+        Rgb([rb, g, rb])
     }
 }
 
@@ -39,8 +34,8 @@ pub struct RgbPixel {
 }
 
 impl RgbPixel {
-    pub fn new(r: u8, g: u8, b: u8) -> RgbPixel {
-        RgbPixel { dat: [r, g, b] }
+    pub fn new(r: u8, g: u8, b: u8) -> Self {
+        Self { dat: [r, g, b] }
     }
 }
 
@@ -55,21 +50,13 @@ pub struct YUV420Pixel {
 }
 
 impl YUV420Pixel {
-    pub fn new(c: u8, d: u8, e: u8) -> YUV420Pixel {
-        YUV420Pixel { dat: [c, d, e] }
+    pub fn new(c: u8, d: u8, e: u8) -> Self {
+        Self { dat: [c, d, e] }
     }
 }
 
-fn clamp(v : i32) -> u8 {
-    if v > 0xFF {
-        0xFF
-    } else {
-        if v < 0 {
-            0
-        } else {
-            v as u8
-        }
-    }
+fn clamp(v: i32) -> u8 {
+    v.max(0).min(255) as u8
 }
 
 impl ToRgb for YUV420Pixel {
@@ -77,15 +64,10 @@ impl ToRgb for YUV420Pixel {
         let y = self.dat[0] as i32;
         let u = self.dat[1] as i32;
         let v = self.dat[2] as i32;
-        let c = y - 16;
-        let d = u - 128;
-        let e = v - 128;
-
-        let r = (298 * c + 409 * e + 128) >> 8;
-        let g = (298 * c - 100 * d - 208 * e + 128) >> 8;
-        let b = (298 * c + 516 * d + 128) >> 8;
-
-        Rgb([clamp(r), clamp(g), clamp(b)])
+        let r = clamp(298 * (y - 16) + 409 * (v - 128) + 128 >> 8);
+        let g = clamp(298 * (y - 16) - 100 * (u - 128) - 208 * (v - 128) + 128 >> 8);
+        let b = clamp(298 * (y - 16) + 516 * (u - 128) + 128 >> 8);
+        Rgb([r, g, b])
     }
 }
 
@@ -95,31 +77,27 @@ pub struct Rgb565 {
 
 impl Rgb565 {
     fn new(dat: u16) -> Self {
-        Rgb565 { dat }
+        Self { dat }
     }
 }
 
 impl ToRgb for Rgb565 {
     fn rgb(&self) -> Rgb<u8> {
-        let byte = |i, c| (((1 << c) - 1) as u16 & (self.dat >> i)) as u8;
-
-        let r8 = (byte(11, 5) as u16 * 527 + 23) >> 6;
-        let g8 = (byte(5, 6) as u16 * 259 + 33) >> 6;
-        let b8 = (byte(0, 5) as u16 * 527 + 23) >> 6;
+        let r8 = ((self.dat >> 11) * 527 + 23) >> 6;
+        let g8 = ((self.dat >> 5 & 0x3F) * 259 + 33) >> 6;
+        let b8 = ((self.dat & 0x1F) * 527 + 23) >> 6;
         Rgb([r8 as u8, g8 as u8, b8 as u8])
     }
 }
 
 pub fn rgb565_to_rgb888(mapping: &[u16], pitch: u32, size: (u32, u32)) -> RgbImage {
     let mut img = RgbImage::new(size.0, size.1);
-
     let bytepitch = pitch / 2;
 
     for y in 0..size.1 {
         for x in 0..size.0 {
-            let offset = y * bytepitch + x;
-            let v = Rgb565::new(mapping[offset as usize]);
-
+            let offset = (y * bytepitch + x) as usize;
+            let v = Rgb565::new(mapping[offset]);
             unsafe { img.unsafe_put_pixel(x, y, v.rgb()) };
         }
     }
@@ -128,24 +106,22 @@ pub fn rgb565_to_rgb888(mapping: &[u16], pitch: u32, size: (u32, u32)) -> RgbIma
 
 pub fn decode_image(mapping: &[u32], pitch: u32, size: (u32, u32)) -> RgbImage {
     let mut img = RgbImage::new(size.0, size.1);
-
     let bytepitch = pitch / 4;
 
     for y in 0..size.1 {
         for x in 0..size.0 {
-            let offset = y * bytepitch + x;
-            let v = mapping[offset as usize];
-            let byte = |i| (v >> i * 8) as u8;
-
-            let px = Rgb([byte(2), (byte(1)), (byte(0))]);
-
+            let offset = (y * bytepitch + x) as usize;
+            let v = mapping[offset];
+            let px = Rgb([
+                (v >> 16) as u8,
+                (v >> 8) as u8,
+                v as u8,
+            ]);
             unsafe { img.unsafe_put_pixel(x, y, px) };
         }
     }
-
     img
 }
-
 pub fn decode_image_multichannel(
     mappings: [&[u8]; 3],
     size: (u32, u32),
@@ -155,15 +131,14 @@ pub fn decode_image_multichannel(
 
     for y in 0..size.1 {
         for x in 0..size.0 {
-            let offset: usize = (y * pitches[0] + x) as _;
-            let offset1: usize = ((y / 2) * (pitches[1]) + x / 2) as _;
-            let offset2: usize = ((y / 2) * (pitches[2]) + x / 2) as _;
+            let offset = (y * pitches[0] + x) as usize;
+            let offset1 = ((y / 2) * pitches[1] + x / 2) as usize;
+            let offset2 = ((y / 2) * pitches[2] + x / 2) as usize;
             let yuv = YUV420Pixel::new(
                 mappings[0][offset],
                 mappings[1][offset1],
                 mappings[2][offset2],
             );
-
             unsafe { img.unsafe_put_pixel(x, y, yuv.rgb()) };
         }
     }
@@ -181,17 +156,15 @@ pub fn decode_small_image_multichannel(
 
     for y in 0..halfsize.1 {
         for x in 0..halfsize.0 {
-            let offset: usize = (2 * y * pitches[0] + 2 * x) as _;
-            let offset1: usize = (y * pitches[1] + x) as _;
-            let offset2: usize = (y * pitches[2] + x) as _;
-            let yat = |offset| mappings[0][offset] as u32;
-            let yval = (yat(offset)
-                + yat(offset + 1)
-                + yat(offset + pitches[0] as usize)
-                + yat(offset + pitches[0] as usize + 1))
+            let offset = (2 * y * pitches[0] + 2 * x) as usize;
+            let offset1 = (y * pitches[1] + x) as usize;
+            let offset2 = (y * pitches[2] + x) as usize;
+            let yval = (mappings[0][offset] as u32
+                + mappings[0][offset + 1] as u32
+                + mappings[0][offset + pitches[0] as usize] as u32
+                + mappings[0][offset + pitches[0] as usize + 1] as u32)
                 / 4;
-            let yuv = YUV420Pixel::new(yval as _, mappings[1][offset1], mappings[2][offset2]);
-
+            let yuv = YUV420Pixel::new(yval as u8, mappings[1][offset1], mappings[2][offset2]);
             unsafe { img.unsafe_put_pixel(x, y, yuv.rgb()) };
         }
     }
